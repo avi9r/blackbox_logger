@@ -1,147 +1,152 @@
-# blackbox_logger
+# 🕵️‍♂️ BlackBox Logger
 
-A framework-agnostic HTTP logger for Python apps. Logs requests and responses while masking sensitive data like passwords and tokens.
+![PyPI](https://img.shields.io/pypi/v/blackbox-logger)
+![License](https://img.shields.io/github/license/avi9r/blackbox_logger)
 
-## Features
 
-- Request/response logging
-- Payload masking (e.g. passwords, secrets)
-- Works with any Python HTTP framework (Flask, Django, FastAPI, WSGI)
+A universal request/response logger for **Django**, **Flask**, **FastAPI**, and other Python apps.  
+Automatically logs requests and responses, user info, IP address, and more — with **masked sensitive data** — into a log file and SQLite database.
 
-## Install
+---
+
+## 🚀 Features
+
+- ✅ Logs all HTTP requests and responses  
+- ✅ Logs to both `blackbox.log` file and SQLite DB (`blackbox_logs.db`)  
+- ✅ Automatically masks sensitive fields (e.g., `password`, `token`, etc.)  
+- ✅ Logs user (if available), IP address, and user agent  
+- ✅ Skips HTML content in logs to avoid noise  
+- ✅ Works out-of-the-box in **Django**  
+- ⚙️ Easy integration in **Flask** and **FastAPI**
+
+---
+
+## 📦 Installation
 
 ```bash
-pip install git+https://github.com/yourusername/blackbox_logger.git
-
+pip install blackbox-logger
+Or install directly from GitHub:
+```
+```bash
+pip install git+https://github.com/avi9r/blackbox_logger.git
 ```
 
+## 📁 Logs
+- After running, you’ll find:
 
-# 📘 Usage Examples for Each Framework
-## 🔹 Flask
+📄 log/blackbox.log — clean file logs
+
+🗃 log/blackbox_logs.db — SQLite DB (table: logs)
+
+# ⚙️ Usage
+## 🟩 Django
+ - Add middleware:
+# your_project/middleware.py
 ```bash
-from flask import Flask, request, g
-from blackbox_logger import HTTPLogger
+    from django.utils.deprecation import MiddlewareMixin
+    from blackbox_logger.logger import HTTPLogger
+
+    logger = HTTPLogger()
+
+    class BlackBoxLoggerMiddleware(MiddlewareMixin):
+        def process_request(self, request):
+            logger.log_request(
+                request.method,
+                request.path,
+                dict(request.headers),
+                request.body,
+                request
+            )
+
+        def process_response(self, request, response):
+            logger.log_response(
+                request.method,
+                request.path,
+                dict(request.headers),
+                response.content,
+                response.status_code,
+                request
+            )
+            return response
+```
+## Enable middleware in settings.py:
+
+```bash
+MIDDLEWARE = [
+    'your_project.middleware.BlackBoxLoggerMiddleware',
+    ...
+]
+```
+## 🟦 Flask
+(Optional) Install Flask-Login for user tracking:
+
+```bash
+pip install flask-login
+```
+## Initialize the logger in app.py:
+```bash
+from flask import Flask, request
+from flask_login import current_user
+from blackbox_logger.logger import HTTPLogger
+
+logger = HTTPLogger(
+    get_user=lambda headers, request=None: current_user.username if current_user.is_authenticated else "Anonymous"
+)
 
 app = Flask(__name__)
-logger = HTTPLogger(get_user=lambda headers: headers.get("X-User", "Anonymous"))
 
 @app.before_request
-def before():
-    g.request_body = request.get_data()
+def log_req():
     logger.log_request(
-        method=request.method,
-        path=request.path,
-        headers=request.headers,
-        body=g.request_body,
-        request=request,
+        request.method,
+        request.path,
+        dict(request.headers),
+        request.get_data(),
+        request
     )
 
 @app.after_request
-def after(response):
+def log_resp(response):
     logger.log_response(
-        method=request.method,
-        path=request.path,
-        headers=request.headers,
-        response_body=response.get_data(),
-        status_code=response.status_code,
-        request=request,
+        request.method,
+        request.path,
+        dict(request.headers),
+        response.get_data(),
+        response.status_code,
+        request
     )
     return response
 ```
-## 🔹 Django
+## 🟨 FastAPI
+- Add middleware in main.py:
 ```bash
-from django.utils.deprecation import MiddlewareMixin
-from blackbox_logger import HTTPLogger
+from fastapi import FastAPI, Request, Response
+from blackbox_logger.logger import HTTPLogger
 
-logger = HTTPLogger(get_user=lambda request: request.user.username if request.user.is_authenticated else "Anonymous")
-
-class BlackboxLoggerMiddleware(MiddlewareMixin):
-    def process_request(self, request):
-        request._body_payload = request.body
-        logger.log_request(
-            method=request.method,
-            path=request.get_full_path(),
-            headers=request.headers,
-            body=request.body,
-            request=request,
-        )
-
-    def process_response(self, request, response):
-        logger.log_response(
-            method=request.method,
-            path=request.get_full_path(),
-            headers=request.headers,
-            response_body=response.content,
-            status_code=response.status_code,
-            request=request,
-        )
-        return response
-```
-## 🔹 FastAPI
-```bash
-from fastapi import FastAPI, Request
-from blackbox_logger import HTTPLogger
+logger = HTTPLogger()
 
 app = FastAPI()
-logger = HTTPLogger(get_user=lambda headers: headers.get("X-User", "Anonymous"))
 
 @app.middleware("http")
-async def log_requests(request: Request, call_next):
+async def blackbox_logger_middleware(request: Request, call_next):
+    # Optional: Attach user to request.state (e.g., after auth)
+    request.state.user = "Anonymous"
+
     body = await request.body()
-    logger.log_request(
-        method=request.method,
-        path=request.url.path,
-        headers=request.headers,
-        body=body,
-        request=request,
-    )
+    logger.log_request(request.method, str(request.url), dict(request.headers), body, request)
+
     response = await call_next(request)
-    logger.log_response(
-        method=request.method,
-        path=request.url.path,
-        headers=request.headers,
-        response_body=response.body,
-        status_code=response.status_code,
-        request=request,
-    )
+    response_body = b"".join([chunk async for chunk in response.body_iterator])
+    response.body_iterator = iter([response_body])
+
+    logger.log_response(request.method, str(request.url), dict(request.headers), response_body, response.status_code, request)
     return response
-
 ```
-## 🔹 WSGI (e.g., Gunicorn)
-## For WSGI applications, you can use the WSGIRequestLogger middleware:
+# 🔐 Masking Sensitive Data
+- By default, the following fields are masked:
 ```bash
-from blackbox_logger import HTTPLogger
-
-class WSGIRequestLogger:
-    def __init__(self, app, get_user=None, get_client_ip=None):
-        self.app = app
-        self.logger = HTTPLogger(get_user=get_user, get_client_ip=get_client_ip)
-
-    def __call__(self, environ, start_response):
-        method = environ.get('REQUEST_METHOD')
-        path = environ.get('PATH_INFO')
-        headers = {key: value for key, value in environ.items() if key.startswith('HTTP_')}
-        body = environ.get('wsgi.input').read()
-        client_ip = environ.get('REMOTE_ADDR')
-
-        self.logger.log_request(
-            method=method,
-            path=path,
-            headers=headers,
-            body=body,
-            request=environ,
-        )
-
-        def custom_start_response(status, response_headers, exc_info=None):
-            self.logger.log_response(
-                method=method,
-                path=path,
-                headers=headers,
-                response_body=status,
-                status_code=status.split()[0],
-                request=environ,
-            )
-            return start_response(status, response_headers, exc_info)
-
-        return self.app(environ, custom_start_response)
+["password", "token", "access_token", "secret", "authorization", "csrfmiddlewaretoken"]
 ```
+- You can update this in masking.py if needed.
+## 📜 License
+- MIT License
