@@ -51,6 +51,8 @@ class HTTPLogger:
         return "Unknown"
 
     def log_request(self, method, path, headers, body, request):
+        if any(path.startswith(excluded) for excluded in EXCLUDED_PATHS):
+            return
         user = self.get_user(headers, request)
         user_agent = headers.get("User-Agent", "Unknown")
         client_ip = self.get_client_ip(request)
