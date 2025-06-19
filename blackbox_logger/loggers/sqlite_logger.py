@@ -4,10 +4,18 @@ import json
 from datetime import datetime
 
 class SQLiteLogger:
-    def __init__(self, db_path="log/blackbox_logs.db"):
+    def __init__(self):
+        db_path = "log/blackbox_logs.db"
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self._create_table()
+        self._set_permissions(db_path)
+
+    def _set_permissions(self, db_path):
+        try:
+            os.chmod(db_path, 0o664)
+        except OSError as e:
+            print(f"Error setting permissions: {e}")
 
     def _create_table(self):
         self.conn.execute("""

@@ -14,4 +14,10 @@ def setup_file_logger(log_dir="log", log_file="blackbox.log"):
         handler.setFormatter(formatter)
         logger.addHandler(handler)
 
+    # Set permissions for the log file
+    try:
+        os.chmod(log_path, 0o664)
+    except OSError as e:
+        print(f"Error setting permissions: {e}")
+
     return logger
