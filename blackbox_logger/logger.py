@@ -61,10 +61,11 @@ class HTTPLogger:
         user_agent = headers.get("User-Agent", "Unknown")
         client_ip = self.get_client_ip(request)
 
-        # Try to detect if content is HTML
+        # Normalize headers and detect content-type safely
         content_type = headers.get("Content-Type", "") or ""
+        is_html = "html" in content_type.lower() or path.endswith(".html")
 
-        if "html" in content_type.lower() or path.endswith(".html"):
+        if is_html:
             parsed_response = "[HTML content skipped]"
         else:
             try:
@@ -75,7 +76,10 @@ class HTTPLogger:
                     if isinstance(response_body, bytes)
                     else str(response_body)
                 )
-
+        MAX_LOG_LENGTH = 5000
+        if isinstance(parsed_response, str) and len(parsed_response) > MAX_LOG_LENGTH:
+            parsed_response = f"[Response too large to log — {len(parsed_response)} characters]"
+            
         msg = f"[RESPONSE] {method} {path} | User: {user} | IP: {client_ip} | User-Agent: {user_agent} | Status: {status_code} | Response: {parsed_response}"
         file_logger.info(msg)
         sqlite_logger.log("response", method, path, user, client_ip, user_agent, parsed_response, status_code)
