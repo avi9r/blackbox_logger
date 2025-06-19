@@ -10,6 +10,11 @@ from .loggers.sqlite_logger import SQLiteLogger
 # Configuration from env vars
 MAX_LOG_LENGTH = int(os.getenv("BLACKBOX_MAX_LOG_LENGTH", 5000))
 SKIP_HTML_JS = os.getenv("BLACKBOX_SKIP_HTML_JS", "true").lower() == "true"
+EXCLUDED_PATHS = [
+    "/admin/", "/jsi18n/", "/static/", "/media/", "/favicon.ico",
+    "/robots.txt", "/health", "/metrics", "/swagger", "/redoc",
+    "/docs", "/sentry-debug/", "/__debug__/", "/auth/token/refresh/", "/.well-known/",
+]
 
 file_logger = setup_file_logger()
 sqlite_logger = SQLiteLogger()
@@ -61,6 +66,8 @@ class HTTPLogger:
         sqlite_logger.log("request", method, path, user, client_ip, user_agent, masked_body)
 
     def log_response(self, method, path, headers, response_body, status_code, request, duration=None):
+        if any(path.startswith(excluded) for excluded in EXCLUDED_PATHS):
+            return
         user = self.get_user(headers, request)
         user_agent = headers.get("User-Agent", "Unknown")
         client_ip = self.get_client_ip(request)
