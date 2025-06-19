@@ -3,21 +3,21 @@
 ![PyPI](https://img.shields.io/pypi/v/blackbox-logger)
 ![License](https://img.shields.io/github/license/avi9r/blackbox_logger)
 
-
 A universal request/response logger for **Django**, **Flask**, **FastAPI**, and other Python apps.  
-Automatically logs requests and responses, user info, IP address, and more — with **masked sensitive data** — into a log file and SQLite database.
+Automatically logs requests and responses, user info, IP address, and more — with **masked sensitive data** — into a log file and SQLite/PostgreSQL database.
 
 ---
 
 ## 🚀 Features
 
 - ✅ Logs all HTTP requests and responses  
-- ✅ Logs to both `blackbox.log` file and SQLite DB (`blackbox_logs.db`)  
+- ✅ Logs to both `blackbox.log` file and SQLite or PostgreSQL DB  
 - ✅ Automatically masks sensitive fields (e.g., `password`, `token`, etc.)  
-- ✅ Logs user (if available), IP address, and user agent  
-- ✅ Skips HTML content in logs to avoid noise  
-- ✅ Works out-of-the-box in **Django**  
-- ⚙️ Easy integration in **Flask** and **FastAPI**
+- ✅ Logs user (if available), IP address, user agent, and request duration  
+- ✅ Skips HTML/JS or large responses automatically  
+- ✅ Supports log rotation  
+- ✅ Decorator-based and middleware-based integration  
+- ✅ Works out-of-the-box in **Django**, **Flask**, and **FastAPI**
 
 ---
 
@@ -25,113 +25,114 @@ Automatically logs requests and responses, user info, IP address, and more — w
 
 ```bash
 pip install blackbox-logger
-Or install directly from GitHub:
-```
-```bash
+# Or install directly from GitHub:
 pip install git+https://github.com/avi9r/blackbox_logger.git
 ```
 
+---
+
 ## 📁 Logs
-- After running, you’ll find:
 
-📄 log/blackbox.log — clean file logs
+- `log/blackbox.log` — rotating file logs  
+- `log/blackbox_logs.db` — SQLite DB (or PostgreSQL if configured)
 
-🗃 log/blackbox_logs.db — SQLite DB (table: logs)
+---
 
-# ⚙️ Usage
-## 🟩 Django
- - Add middleware:
-# your_project/middleware.py
-```bash
-    from django.utils.deprecation import MiddlewareMixin
-    from blackbox_logger.logger import HTTPLogger
+## ⚙️ Usage
 
-    logger = HTTPLogger()
+### 🟩 Django Middleware
 
-    class BlackBoxLoggerMiddleware(MiddlewareMixin):
-        def process_request(self, request):
-            logger.log_request(
-                request.method,
-                request.path,
-                dict(request.headers),
-                request.body,
-                request
-            )
+```python
+from django.utils.deprecation import MiddlewareMixin
+from blackbox_logger.logger import HTTPLogger
+import time
 
-        def process_response(self, request, response):
-            logger.log_response(
-                request.method,
-                request.path,
-                dict(request.headers),
-                response.content,
-                response.status_code,
-                request
-            )
-            return response
+logger = HTTPLogger()
+
+class BlackBoxLoggerMiddleware(MiddlewareMixin):
+    def process_request(self, request):
+        request._start_time = time.time()
+        logger.log_request(request.method, request.path, dict(request.headers), request.body, request)
+
+    def process_response(self, request, response):
+        duration = time.time() - getattr(request, "_start_time", time.time())
+        logger.log_response(
+            request.method, request.path, dict(response.headers),
+            response.content, response.status_code, request, duration
+        )
+        return response
 ```
-## Enable middleware in settings.py:
 
-```bash
+Then in `settings.py`:
+
+```python
 MIDDLEWARE = [
     'your_project.middleware.BlackBoxLoggerMiddleware',
     ...
 ]
 ```
-## 🟦 Flask
-(Optional) Install Flask-Login for user tracking:
 
-```bash
-pip install flask-login
+### 🔵 Django Decorator Usage
+
+```python
+from blackbox_logger.logger import HTTPLogger
+logger = HTTPLogger()
+
+@logger.decorator
+def my_view(request):
+    return JsonResponse({"message": "OK"})
 ```
-## Initialize the logger in app.py:
-```bash
+
+---
+
+### 🟖 Flask Middleware
+
+```python
 from flask import Flask, request
 from flask_login import current_user
 from blackbox_logger.logger import HTTPLogger
+import time
 
-logger = HTTPLogger(
-    get_user=lambda headers, request=None: current_user.username if current_user.is_authenticated else "Anonymous"
-)
-
+logger = HTTPLogger(get_user=lambda h, r=None: current_user.username if current_user.is_authenticated else "Anonymous")
 app = Flask(__name__)
 
 @app.before_request
-def log_req():
-    logger.log_request(
-        request.method,
-        request.path,
-        dict(request.headers),
-        request.get_data(),
-        request
-    )
+def log_request():
+    request._start_time = time.time()
+    logger.log_request(request.method, request.path, dict(request.headers), request.get_data(), request)
 
 @app.after_request
-def log_resp(response):
+def log_response(response):
+    duration = time.time() - getattr(request, '_start_time', time.time())
     logger.log_response(
-        request.method,
-        request.path,
-        dict(request.headers),
-        response.get_data(),
-        response.status_code,
-        request
+        request.method, request.path, dict(response.headers),
+        response.get_data(), response.status_code, request, duration
     )
     return response
 ```
-## 🟨 FastAPI
-- Add middleware in main.py:
-```bash
+
+### 🟨 Flask Decorator Usage
+
+```python
+@logger.decorator
+def your_flask_view():
+    return jsonify({"msg": "Hello"})
+```
+
+---
+
+### 🟘 FastAPI Middleware
+
+```python
 from fastapi import FastAPI, Request, Response
 from blackbox_logger.logger import HTTPLogger
 
 logger = HTTPLogger()
-
 app = FastAPI()
 
 @app.middleware("http")
 async def blackbox_logger_middleware(request: Request, call_next):
-    # Optional: Attach user to request.state (e.g., after auth)
-    request.state.user = "Anonymous"
-
+    request.state.user = "Anonymous"  # attach user if needed
     body = await request.body()
     logger.log_request(request.method, str(request.url), dict(request.headers), body, request)
 
@@ -139,18 +140,90 @@ async def blackbox_logger_middleware(request: Request, call_next):
     response_body = b"".join([chunk async for chunk in response.body_iterator])
     response.body_iterator = iter([response_body])
 
-    logger.log_response(request.method, str(request.url), dict(request.headers), response_body, response.status_code, request)
+    logger.log_response(
+        request.method, str(request.url), dict(response.headers),
+        response_body, response.status_code, request
+    )
     return response
 ```
-# 🔐 Masking Sensitive Data
-- By default, the following fields are masked:
-```bash
+
+### 🟦 FastAPI Decorator Usage
+
+```python
+@app.get("/hello")
+@logger.decorator
+def hello(request: Request):
+    return {"hello": "world"}
+```
+
+---
+
+## 🔍 Decorator vs Middleware Summary
+
+| Integration Style             | Need Decorator? | Works Without It? |
+|------------------------------|------------------|-------------------|
+| Django/Flask/FastAPI Middleware | ❌ No            | ✅ Yes             |
+| Manual log_request/log_response | ❌ No           | ✅ Yes             |
+| Only with `@decorator`       | ✅ Yes (if no middleware) | ✅ Yes     |
+
+---
+
+## 🔐 Masking Sensitive Data
+
+Default masked fields:
+
+```python
 ["password", "token", "access_token", "secret", "authorization", "csrfmiddlewaretoken"]
 ```
-- You can update this in masking.py if needed.
-## 📜 License
-- MIT License
 
+To add custom fields:
+
+```python
+logger = HTTPLogger(custom_mask_fields={"otp", "session_id"})
+```
+
+---
+
+## 📃 PostgreSQL Support
+
+Set these environment variables:
+
+```bash
+BLACKBOX_DB_TYPE=postgres
+BLACKBOX_PG_DB=blackbox_logs
+BLACKBOX_PG_USER=postgres
+BLACKBOX_PG_PASSWORD=secret
+BLACKBOX_PG_HOST=localhost
+BLACKBOX_PG_PORT=5432
+```
+
+---
+
+## 🔄 Log Rotation
+
+Enable rotating file logs:
+
+```bash
+BLACKBOX_LOG_MAX_SIZE=1048576     # 1MB
+BLACKBOX_LOG_BACKUP_COUNT=5       # Keep 5 backups
+```
+
+---
+
+## 📜 Sample Output
+
+```log
+2025-06-19 18:29:15 [INFO] [REQUEST] POST /api/login | User: admin | IP: 127.0.0.1 | Payload: {"username": "admin", "password": "***"}
+2025-06-19 18:29:15 [INFO] [RESPONSE] POST /api/login | User: admin | IP: 127.0.0.1 | Status: 200 | Duration: 0.23s | Response: {"status": "ok"}
+```
+
+---
+
+## 📓 License
+
+MIT License
+
+<!-- Build commands -->
 <!-- rm -rf build dist *.egg-info-->
 <!-- python -m build -->
 <!-- twine upload dist/* -->
