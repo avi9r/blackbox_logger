@@ -50,26 +50,35 @@ class HTTPLogger:
             pass
         return "Unknown"
 
-    def _extract_files_from_multipart(self, body, headers):
+    def _extract_form_and_files_from_multipart(self, body, headers):
         import email
         from email.parser import BytesParser
         from email.policy import default
         content_type = headers.get("Content-Type", "")
         if "multipart/form-data" not in content_type:
             return None
-        # Parse multipart body to extract file names
         try:
             msg = BytesParser(policy=default).parsebytes(
                 b"Content-Type: " + content_type.encode() + b"\r\n\r\n" + body
             )
-            files = {}
+            form = {}
             for part in msg.iter_parts():
                 cd = part.get("Content-Disposition", "")
-                if "filename=" in cd:
-                    name = part.get_param('name', header='content-disposition')
-                    filename = part.get_param('filename', header='content-disposition')
-                    files[name] = filename
-            return files
+                if not cd:
+                    continue
+                name = part.get_param('name', header='content-disposition')
+                filename = part.get_param('filename', header='content-disposition')
+                if filename:
+                    form[name] = filename
+                else:
+                    # decode payload as string
+                    try:
+                        value = part.get_payload(decode=True)
+                        value = value.decode(part.get_content_charset() or 'utf-8', errors='ignore')
+                    except Exception:
+                        value = '[unreadable]'
+                    form[name] = value
+            return form
         except Exception:
             return None
 
@@ -97,8 +106,8 @@ class HTTPLogger:
         content_type = headers.get("Content-Type", "").lower()
         masked_body = None
         if "multipart/form-data" in content_type:
-            files = self._extract_files_from_multipart(body, headers)
-            masked_body = {"files": files} if files else "[multipart/form-data]"
+            form = self._extract_form_and_files_from_multipart(body, headers)
+            masked_body = form if form else "[multipart/form-data]"
         else:
             try:
                 parsed_body = json.loads(body)
@@ -124,8 +133,8 @@ class HTTPLogger:
         if SKIP_HTML_JS and is_html_or_js:
             parsed_response = "[HTML/JS content skipped]"
         elif "multipart/form-data" in content_type:
-            files = self._extract_files_from_multipart(response_body, headers)
-            parsed_response = {"files": files} if files else "[multipart/form-data]"
+            form = self._extract_form_and_files_from_multipart(response_body, headers)
+            parsed_response = form if form else "[multipart/form-data]"
         else:
             try:
                 parsed_response = json.loads(response_body)
