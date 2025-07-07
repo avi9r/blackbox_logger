@@ -50,18 +50,62 @@ class HTTPLogger:
             pass
         return "Unknown"
 
+    def _extract_files_from_multipart(self, body, headers):
+        import email
+        from email.parser import BytesParser
+        from email.policy import default
+        content_type = headers.get("Content-Type", "")
+        if "multipart/form-data" not in content_type:
+            return None
+        # Parse multipart body to extract file names
+        try:
+            msg = BytesParser(policy=default).parsebytes(
+                b"Content-Type: " + content_type.encode() + b"\r\n\r\n" + body
+            )
+            files = {}
+            for part in msg.iter_parts():
+                cd = part.get("Content-Disposition", "")
+                if "filename=" in cd:
+                    name = part.get_param('name', header='content-disposition')
+                    filename = part.get_param('filename', header='content-disposition')
+                    files[name] = filename
+            return files
+        except Exception:
+            return None
+
+    def _replace_files_in_json(self, data):
+        # Recursively replace file-like dicts with just their filename
+        if isinstance(data, dict):
+            new_data = {}
+            for k, v in data.items():
+                if isinstance(v, dict) and 'filename' in v:
+                    new_data[k] = v['filename']
+                else:
+                    new_data[k] = self._replace_files_in_json(v)
+            return new_data
+        elif isinstance(data, list):
+            return [self._replace_files_in_json(i) for i in data]
+        return data
+
     def log_request(self, method, path, headers, body, request):
         if any(path.startswith(excluded) for excluded in EXCLUDED_PATHS):
             return
-        user = self.get_user(headers, request)
-        user_agent = headers.get("User-Agent", "Unknown")
+        user = self.get_user(dict(request.headers), request)
+        user_agent = request.headers.get("User-Agent", "Unknown")
         client_ip = self.get_client_ip(request)
 
-        try:
-            parsed_body = json.loads(body)
-            masked_body = mask_sensitive_data(parsed_body, self.custom_mask_fields)
-        except Exception:
-            masked_body = body.decode("utf-8", errors="ignore") if isinstance(body, bytes) else str(body)
+        content_type = headers.get("Content-Type", "").lower()
+        masked_body = None
+        if "multipart/form-data" in content_type:
+            files = self._extract_files_from_multipart(body, headers)
+            masked_body = {"files": files} if files else "[multipart/form-data]"
+        else:
+            try:
+                parsed_body = json.loads(body)
+                parsed_body = self._replace_files_in_json(parsed_body)
+                masked_body = mask_sensitive_data(parsed_body, self.custom_mask_fields)
+            except Exception:
+                masked_body = body.decode("utf-8", errors="ignore") if isinstance(body, bytes) else str(body)
 
         msg = f"[REQUEST] {method} {path} | User: {user} | IP: {client_ip} | User-Agent: {user_agent} | Payload: {masked_body}"
         file_logger.info(msg)
@@ -70,8 +114,8 @@ class HTTPLogger:
     def log_response(self, method, path, headers, response_body, status_code, request, duration=None):
         if any(path.startswith(excluded) for excluded in EXCLUDED_PATHS):
             return
-        user = self.get_user(headers, request)
-        user_agent = headers.get("User-Agent", "Unknown")
+        user = self.get_user(dict(request.headers), request)
+        user_agent = request.headers.get("User-Agent", "Unknown")
         client_ip = self.get_client_ip(request)
 
         content_type = headers.get("Content-Type", "").lower()
@@ -79,9 +123,13 @@ class HTTPLogger:
 
         if SKIP_HTML_JS and is_html_or_js:
             parsed_response = "[HTML/JS content skipped]"
+        elif "multipart/form-data" in content_type:
+            files = self._extract_files_from_multipart(response_body, headers)
+            parsed_response = {"files": files} if files else "[multipart/form-data]"
         else:
             try:
                 parsed_response = json.loads(response_body)
+                parsed_response = self._replace_files_in_json(parsed_response)
             except Exception:
                 parsed_response = (
                     response_body.decode("utf-8", errors="ignore")
